@@ -2,25 +2,31 @@ pipeline {
     agent any 
 
     environment {
-        DOCKER_CREDENTIALS_ID = 'roseaw-dockerhub'
-        DOCKER_IMAGE = 'diallof2/lab3-app'
+        DOCKER_CREDENTIALS_ID = 'roseaw-dockerhub'  
+        DOCKER_IMAGE = 'diallof2/lab3-app'                              // <----- changed to your DockerHub image (diallof2)
         IMAGE_TAG = "build-${BUILD_NUMBER}"
-        GITHUB_URL = 'https://github.com/diallof2/225-lab3-2.git'
-        KUBECONFIG = credentials('roseaw-225')
+        GITHUB_URL = 'https://github.com/diallof2/225-lab3-3.git'      // <----- changed to your GitHub repo
+        KUBECONFIG = credentials('roseaw-225')                          // <----- assuming this is still your Kubernetes credentials ID
     }
 
     stages {
         stage('Checkout') {
             steps {
-                echo "🔄 Checking out code from GitHub..."
+                cleanWs()
                 checkout([$class: 'GitSCM', branches: [[name: '*/main']],
                           userRemoteConfigs: [[url: "${GITHUB_URL}"]]])
             }
         }
 
+        stage('Lint HTML') {
+            steps {
+                sh 'npm install htmlhint --save-dev'
+                sh 'npx htmlhint *.html'
+            }
+        }
+
         stage('Build Docker Image') {
             steps {
-                echo "🐳 Building Docker image: ${DOCKER_IMAGE}:${IMAGE_TAG}"
                 script {
                     docker.build("${DOCKER_IMAGE}:${IMAGE_TAG}")
                 }
@@ -29,7 +35,6 @@ pipeline {
 
         stage('Push Docker Image') {
             steps {
-                echo "📤 Pushing Docker image to DockerHub..."
                 script {
                     docker.withRegistry('https://index.docker.io/v1/', "${DOCKER_CREDENTIALS_ID}") {
                         docker.image("${DOCKER_IMAGE}:${IMAGE_TAG}").push()
@@ -38,34 +43,39 @@ pipeline {
             }
         }
 
-        stage('Deploy to Kubernetes') {
+        stage('Deploy to Dev Environment') {
             steps {
-                echo "🚀 Deploying to Kubernetes..."
                 script {
-                    sh "sed -i 's|${DOCKER_IMAGE}:latest|${DOCKER_IMAGE}:${IMAGE_TAG}|' deployment.yaml"
-                    sh "kubectl apply -f deployment.yaml"
-                    sh "kubectl apply -f ingress.yaml"
+                    // This sets up the Kubernetes configuration using the specified KUBECONFIG
+                    def kubeConfig = readFile(KUBECONFIG)
+                    // This updates the deployment-dev.yaml to use the new image tag
+                    sh "sed -i 's|${DOCKER_IMAGE}:latest|${DOCKER_IMAGE}:${IMAGE_TAG}|' deployment-dev.yaml"
+                    sh "kubectl apply -f deployment-dev.yaml"
                 }
             }
         }
-
-        stage('Verify Kubernetes Resources') {
+        
+        stage('Check Kubernetes Cluster') {
             steps {
-                echo "🔍 Verifying deployed services..."
-                sh "kubectl get all"
+                script {
+                    sh "kubectl get pods"
+                    sh "kubectl get services"
+                    sh "kubectl get deploy"
+                }
             }
         }
     }
 
     post {
+
         success {
-            slackSend([color: "good", message: "✅ Build Success: ${env.JOB_NAME} #${env.BUILD_NUMBER}"])
+            slackSend color: "good", message: "Build Completed: ${env.JOB_NAME} ${env.BUILD_NUMBER}"
         }
         unstable {
-            slackSend([color: "warning", message: "⚠️ Build Unstable: ${env.JOB_NAME} #${env.BUILD_NUMBER}"])
+            slackSend color: "warning", message: "Build Completed: ${env.JOB_NAME} ${env.BUILD_NUMBER}"
         }
         failure {
-            slackSend([color: "danger", message: "❌ Build Failed: ${env.JOB_NAME} #${env.BUILD_NUMBER}"])
+            slackSend color: "danger", message: "Build Completed: ${env.JOB_NAME} ${env.BUILD_NUMBER}"
         }
     }
 }
